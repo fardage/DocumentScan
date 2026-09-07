@@ -1,0 +1,23 @@
+# Standalone compose file for developing/testing DocumentScan on its own.
+# In production the same service block lives in /srv/docker/docker-compose.yml.
+services:
+  documentscan:
+    build: .
+    image: documentscan:local
+    container_name: documentscan
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Zurich
+      - PUID=1001
+      - PGID=1001
+      - CONSUME_DIR=/consume
+      - SCAN_SOURCE=ADF Duplex
+      - SCAN_MODE=Color
+      - SCAN_RESOLUTION=300
+    volumes:
+      - /srv/docker/paperless/consume:/consume
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      # Allow any USB device (major 189) so the scanner still works after it
+      # re-enumerates (lid closed/opened, replugged).
+      - 'c 189:* rmw'
