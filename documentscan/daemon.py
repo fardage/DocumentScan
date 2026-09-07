@@ -77,6 +77,7 @@ class Daemon:
         paper_was_loaded = self.scanner.page_loaded()
         while self.running:
             time.sleep(self.config.poll_interval)
+            self.scanner.check_alive()
             pressed = self.scanner.button_pressed()
             loaded = self.scanner.page_loaded()
 

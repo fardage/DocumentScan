@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from typing import Any
 
 import sane
@@ -23,6 +25,22 @@ class ScannerNotFound(RuntimeError):
     """No usable SANE device was found."""
 
 
+_LIBUSB_NAME = re.compile(r"libusb:(\d{3}):(\d{3})$")
+
+
+def devnode_for(sane_name: str) -> str | None:
+    """Map a SANE name like ``epjitsu:libusb:001:004`` to ``/dev/bus/usb/001/004``."""
+    match = _LIBUSB_NAME.search(sane_name)
+    if not match:
+        return None
+    return f"/dev/bus/usb/{match.group(1)}/{match.group(2)}"
+
+
+def _node_identity(path: str) -> tuple[int, int]:
+    st = os.stat(path)
+    return (st.st_ino, st.st_rdev)
+
+
 class Scanner:
     """Owns one open SANE device handle.
 
@@ -36,6 +54,8 @@ class Scanner:
         self.dev: Any = None
         self.name: str | None = None
         self.model: str | None = None
+        self._devnode: str | None = None
+        self._devnode_id: tuple[int, int] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -81,6 +101,13 @@ class Scanner:
             raise ScannerNotFound(f"could not open {name}: {exc}") from exc
         self.name = name
         self.model = f"{vendor} {model}".strip()
+        self._devnode = devnode_for(name)
+        self._devnode_id = None
+        if self._devnode:
+            try:
+                self._devnode_id = _node_identity(self._devnode)
+            except OSError:
+                log.warning("Cannot stat %s; USB disconnects will only be noticed when scanning", self._devnode)
         log.info("Connected to %s (%s)", self.model, name)
         self._apply_scan_settings()
 
@@ -91,10 +118,28 @@ class Scanner:
             except Exception:  # noqa: BLE001 - best effort
                 pass
             self.dev = None
+        self._devnode = None
+        self._devnode_id = None
         try:
             sane.exit()
         except Exception:  # noqa: BLE001
             pass
+
+    def check_alive(self) -> None:
+        """Raise ScannerNotFound if the USB device node vanished or was recreated.
+
+        The epjitsu backend swallows USB errors when reading its sensors, so a
+        scanner that powered off (lid closed) or re-enumerated would otherwise
+        go unnoticed until the next scan attempt.
+        """
+        if self._devnode is None or self._devnode_id is None:
+            return
+        try:
+            current = _node_identity(self._devnode)
+        except FileNotFoundError:
+            raise ScannerNotFound(f"scanner {self._devnode} disappeared (lid closed or unplugged?)")
+        if current != self._devnode_id:
+            raise ScannerNotFound(f"scanner {self._devnode} was re-enumerated")
 
     # -- sensors -------------------------------------------------------------
 
