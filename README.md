@@ -11,12 +11,15 @@ folder. Paperless does the OCR. Everything runs in one Docker container.
 2. A small Python daemon keeps the device open and polls the backend's
    read-only `scan` (button) and `page-loaded` sensors twice a second.
 3. On a button press with paper in the feeder it scans every sheet
-   (`ADF Duplex`, `Color`, 300 dpi by default), encodes the pages as JPEG and
-   wraps them into a PDF with `img2pdf`.
-4. The PDF is written to a hidden temp dir inside the consume folder, chowned
+   (`ADF Duplex`, `Color`, 300 dpi by default).
+4. Each page is rotated 180 degrees (ScanSnap feeds pages upside down),
+   auto-levelled so the paper is white and the ink black, and lightly
+   sharpened. Then the pages are encoded as JPEG and wrapped into a PDF with
+   `img2pdf`.
+5. The PDF is written to a hidden temp dir inside the consume folder, chowned
    to the paperless user and atomically renamed into place as
    `Scan_YYYY-MM-DD_HH-MM-SS.pdf`. Paperless picks it up via inotify.
-5. If the scanner disappears (lid closed, unplugged, power save) the daemon
+6. If the scanner disappears (lid closed, unplugged, power save) the daemon
    reconnects with backoff.
 
 ## Layout
@@ -27,7 +30,7 @@ docker-compose.yml       standalone compose for this repo
 firmware/1300_0C26.nal   proprietary S1300 firmware (see below)
 sane/dll.conf            load only the epjitsu backend
 sane/epjitsu.conf        firmware path + USB id 04c5:11ed
-documentscan/            the daemon (config, scanner, pdf, uploader, daemon)
+documentscan/            the daemon (config, scanner, enhance, pdf, uploader, daemon)
 tests/                   pytest units that need no hardware
 ```
 
@@ -87,6 +90,11 @@ every time the lid is closed and opened.
 | `POLL_INTERVAL` | `0.5` | seconds between button polls |
 | `FILENAME_PREFIX` | `Scan` | prefix of the delivered PDF |
 | `JPEG_QUALITY` | `85` | JPEG quality of the embedded pages |
+| `ROTATE_FRONT` | `180` | degrees to rotate front sides (0, 90, 180, 270) |
+| `ROTATE_BACK` | `180` | degrees to rotate back sides in duplex mode |
+| `ENHANCE` | `true` | auto-levels + sharpening; `false` keeps the raw scan |
+| `AUTOCONTRAST_CUTOFF` | `1.0` | percent of brightest pixels treated as paper white; raise if backgrounds stay grey, lower if light colours wash out |
+| `SHARPEN` | `true` | unsharp mask after auto-levels |
 | `SCAN_ON_PAPER_INSERT` | `false` | also start scanning when paper is inserted |
 | `SANE_DEVICE` | unset | force a SANE device name instead of the first `epjitsu:` one |
 | `LOG_LEVEL` | `INFO` | `DEBUG` prints every option set |
@@ -117,6 +125,11 @@ Note: only one process can hold the scanner, so stop the daemon
   daemon retries automatically.
 - **Button press does nothing**: check `docker logs documentscan`. A press
   with an empty feeder is logged and ignored.
+- **Pages come out upside down or sideways**: adjust `ROTATE_FRONT` /
+  `ROTATE_BACK`. Paperless's own OCR-based auto-rotation only fixes the
+  archived copy and needs enough text to be confident.
+- **Colours look washed out or the background stays grey**: tune
+  `AUTOCONTRAST_CUTOFF`, or set `ENHANCE=false` to get the raw scanner output.
 - **PDF appears in the consume folder but paperless does not import it**:
   check `docker logs paperless`; the file must be owned by the paperless user
   (`PUID`/`PGID`).

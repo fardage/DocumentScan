@@ -10,6 +10,7 @@ import time
 import sane
 
 from .config import Config
+from .enhance import process_pages
 from .pdf import images_to_pdf
 from .scanner import Scanner, ScannerNotFound
 from .uploader import deliver
@@ -36,10 +37,13 @@ class Daemon:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
         log.info(
-            "DocumentScan starting: source=%r mode=%r dpi=%d consume_dir=%s",
+            "DocumentScan starting: source=%r mode=%r dpi=%d rotate=%d/%d enhance=%s consume_dir=%s",
             self.config.scan_source,
             self.config.scan_mode,
             self.config.scan_resolution,
+            self.config.rotate_front,
+            self.config.rotate_back,
+            self.config.enhance,
             self.config.consume_dir,
         )
 
@@ -107,6 +111,7 @@ class Daemon:
         if not pages:
             log.warning("Scan finished with no pages; nothing to upload")
             return
+        pages = process_pages(pages, self.config)
         pdf = images_to_pdf(pages, self.config.scan_resolution, self.config.jpeg_quality)
         path = deliver(
             pdf,

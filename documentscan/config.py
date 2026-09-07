@@ -31,6 +31,13 @@ class Config:
     log_level: str = "INFO"
     # Scan on button press only, or also when paper is inserted.
     scan_on_paper_insert: bool = False
+    # Image processing. ScanSnap feeds pages so they come out upside down.
+    rotate_front: int = 180
+    rotate_back: int = 180
+    enhance: bool = True
+    # Percent of darkest/lightest pixels ignored when stretching levels.
+    autocontrast_cutoff: float = 1.0
+    sharpen: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -50,4 +57,9 @@ class Config:
             jpeg_quality=int(env.get("JPEG_QUALITY", cls.jpeg_quality)),
             log_level=env.get("LOG_LEVEL", cls.log_level).upper(),
             scan_on_paper_insert=_env_bool("SCAN_ON_PAPER_INSERT", cls.scan_on_paper_insert),
+            rotate_front=int(env.get("ROTATE_FRONT", cls.rotate_front)),
+            rotate_back=int(env.get("ROTATE_BACK", cls.rotate_back)),
+            enhance=_env_bool("ENHANCE", cls.enhance),
+            autocontrast_cutoff=float(env.get("AUTOCONTRAST_CUTOFF", cls.autocontrast_cutoff)),
+            sharpen=_env_bool("SHARPEN", cls.sharpen),
         )
