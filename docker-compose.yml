@@ -6,18 +6,29 @@ services:
     image: documentscan:local
     container_name: documentscan
     restart: unless-stopped
+    # Runs as the paperless user; the host udev rule 60-scansnap-s1300.rules
+    # makes the scanner's USB node group-accessible to gid 1001.
+    user: "1001:1001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
     environment:
       - TZ=Europe/Zurich
-      - PUID=1001
-      - PGID=1001
       - CONSUME_DIR=/consume
       - SCAN_SOURCE=ADF Duplex
       - SCAN_MODE=Color
       - SCAN_RESOLUTION=300
     volumes:
       - /srv/docker/paperless/consume:/consume
-      - /dev/bus/usb:/dev/bus/usb
+      # Only the bus the scanner is on (see lsusb); device numbers on it change
+      # when the lid is closed/opened, hence the whole bus directory.
+      - /dev/bus/usb/001:/dev/bus/usb/001
     device_cgroup_rules:
-      # Allow any USB device (major 189) so the scanner still works after it
-      # re-enumerates (lid closed/opened, replugged).
+      # USB character devices (major 189); the mount above limits which ones
+      # are visible.
       - 'c 189:* rmw'

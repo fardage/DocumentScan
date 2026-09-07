@@ -1,0 +1,3 @@
+# Fujitsu ScanSnap S1300: let the documentscan container (uid/gid 1001, mediaservices)
+# open the scanner without running as root. Applied on every (re)enumeration.
+SUBSYSTEM=="usb", ATTR{idVendor}=="04c5", ATTR{idProduct}=="11ed", MODE="0660", GROUP="mediaservices"

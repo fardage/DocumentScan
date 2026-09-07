@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 TMP_SUBDIR = ".documentscan-tmp"
 
@@ -41,10 +44,12 @@ def deliver(pdf_bytes: bytes, consume_dir: str | os.PathLike, prefix: str, uid: 
         fh.flush()
         os.fsync(fh.fileno())
     os.chmod(tmp, 0o644)
-    try:
-        os.chown(tmp, uid, gid)
-    except PermissionError:
-        # Not running as root (e.g. tests); paperless may still be able to read it.
-        pass
+    if (os.getuid(), os.getgid()) != (uid, gid):
+        # Only needed when the daemon runs as a different user than paperless
+        # (e.g. as root); the container normally runs as the paperless user.
+        try:
+            os.chown(tmp, uid, gid)
+        except PermissionError:
+            log.warning("Cannot chown %s to %d:%d; paperless may not be able to read it", tmp, uid, gid)
     os.replace(tmp, final)
     return final

@@ -32,6 +32,8 @@ firmware/1300_0C26.nal   proprietary S1300 firmware (see below)
 sane/dll.conf            load only the epjitsu backend
 sane/epjitsu.conf        firmware path + USB id 04c5:11ed
 documentscan/            the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon)
+host/                    udev rule that makes the scanner accessible to the container user
+paperless/               post-consume script sending a Telegram message per document
 tests/                   pytest units that need no hardware
 ```
 
@@ -73,16 +75,36 @@ docker compose up -d documentscan
 docker logs -f documentscan
 ```
 
-The `device_cgroup_rules` line grants access to every USB character device
-(major 189) so the scanner keeps working after it re-enumerates, which happens
-every time the lid is closed and opened.
+### Running without root
+
+The container runs as the paperless user (uid/gid 1001) with all
+capabilities dropped, `no-new-privileges`, a read-only root filesystem and a
+memory limit. For that user to open the scanner, the host needs the udev rule
+in `host/60-scansnap-s1300.rules`, which gives the S1300's USB node to group
+1001 on every (re)enumeration:
+
+```sh
+sudo cp host/60-scansnap-s1300.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=04c5 --attr-match=idProduct=11ed
+ls -l /dev/bus/usb/001/   # scanner node should be root:mediaservices, mode 660
+```
+
+Only the scanner's USB bus (`/dev/bus/usb/001`) is mounted, not every USB
+device; the `device_cgroup_rules` line still names major 189 because device
+numbers on that bus change whenever the lid is closed and opened. If the
+scanner is ever moved to another port, check `lsusb` for its bus number and
+adjust the mount.
+
+`PUID`/`PGID` only matter if you run the container as root instead; then the
+delivered PDF is chowned to them.
 
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CONSUME_DIR` | `/consume` | paperless consume folder inside the container |
-| `PUID` / `PGID` | `1001` / `1001` | owner of the delivered PDF (paperless user) |
+| `PUID` / `PGID` | `1001` / `1001` | owner to chown the PDF to, only when running as root |
 | `SCAN_SOURCE` | `ADF Duplex` | `ADF Front`, `ADF Back` or `ADF Duplex` |
 | `SCAN_MODE` | `Color` | `Lineart`, `Gray` or `Color` |
 | `SCAN_RESOLUTION` | `300` | dpi, 50 to 600 |
