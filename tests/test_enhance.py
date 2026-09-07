@@ -41,7 +41,7 @@ def test_enhance_whitens_grey_background():
     img = Image.new("RGB", (100, 100), (200, 200, 200))
     for x in range(20, 80):
         img.putpixel((x, 50), (60, 60, 60))
-    out = enhance(img, cutoff=1.0, sharpen=False)
+    out = enhance(img, cutoff=1.0, sharpen_page=False)
     assert out.getpixel((5, 5)) == (255, 255, 255)
     assert out.getpixel((50, 50))[0] < 60
 

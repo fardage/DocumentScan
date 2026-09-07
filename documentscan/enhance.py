@@ -13,6 +13,7 @@ from typing import Sequence
 from PIL import Image, ImageFilter, ImageOps
 
 from .config import Config
+from .deskew import deskew_and_crop
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +34,8 @@ def rotate(image: Image.Image, degrees: int) -> Image.Image:
     return image.rotate(degrees, expand=True, fillcolor="white")
 
 
-def enhance(image: Image.Image, cutoff: float, sharpen: bool) -> Image.Image:
-    """Stretch levels so paper becomes white and ink black, then sharpen."""
+def autocontrast(image: Image.Image, cutoff: float) -> Image.Image:
+    """Stretch levels so paper becomes white and ink black."""
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")
     if cutoff > 0:
@@ -45,29 +46,49 @@ def enhance(image: Image.Image, cutoff: float, sharpen: bool) -> Image.Image:
         image = ImageOps.autocontrast(
             image, cutoff=(DARK_CUTOFF, cutoff), preserve_tone=True
         )
-    if sharpen:
-        image = image.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=3))
     return image
 
 
+def sharpen(image: Image.Image) -> Image.Image:
+    return image.filter(ImageFilter.UnsharpMask(radius=1.5, percent=80, threshold=3))
+
+
+def enhance(image: Image.Image, cutoff: float, sharpen_page: bool) -> Image.Image:
+    image = autocontrast(image, cutoff)
+    return sharpen(image) if sharpen_page else image
+
+
 def process_pages(images: Sequence[Image.Image], config: Config) -> list[Image.Image]:
-    """Apply rotation and enhancement to every page.
+    """Apply rotation, auto-levels, deskew/crop and sharpening to every page.
 
     In duplex mode the backend alternates front/back sides, so even indices
     are fronts and odd indices are backs; other sources are all fronts.
+    Sharpening comes last so the resampling blur of the deskew is removed.
     """
     duplex = config.scan_source == DUPLEX_SOURCE
+    inset_px = int(round(config.crop_inset_mm / 25.4 * config.scan_resolution))
     result: list[Image.Image] = []
     for index, image in enumerate(images):
         is_back = duplex and index % 2 == 1
         degrees = config.rotate_back if is_back else config.rotate_front
         page = rotate(image, degrees)
         if config.enhance:
-            page = enhance(page, config.autocontrast_cutoff, config.sharpen)
+            page = autocontrast(page, config.autocontrast_cutoff)
+        if config.deskew or config.autocrop:
+            page = deskew_and_crop(
+                page,
+                deskew=config.deskew,
+                crop=config.autocrop,
+                max_angle=config.max_skew_deg,
+                inset_px=inset_px,
+            )
+        if config.enhance and config.sharpen:
+            page = sharpen(page)
         result.append(page)
     log.debug(
-        "Processed %d pages (rotate front=%d back=%d, enhance=%s, cutoff=%.1f%%, sharpen=%s)",
+        "Processed %d pages (rotate front=%d back=%d, enhance=%s, cutoff=%.1f%%, "
+        "deskew=%s, autocrop=%s, sharpen=%s)",
         len(result), config.rotate_front, config.rotate_back, config.enhance,
-        config.autocontrast_cutoff, config.sharpen,
+        config.autocontrast_cutoff, config.deskew, config.autocrop, config.sharpen,
     )
     return result

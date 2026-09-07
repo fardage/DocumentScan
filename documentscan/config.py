@@ -20,7 +20,9 @@ class Config:
     scan_source: str = "ADF Duplex"
     scan_mode: str = "Color"
     scan_resolution: int = 300
-    page_width_mm: float = 210.0
+    # Slightly wider than A4 so the whole sheet is captured even when it is
+    # off-centre or skewed; the backing around it is cropped away afterwards.
+    page_width_mm: float = 219.0
     # 0 = let the scanner detect the page length.
     page_height_mm: float = 0.0
     poll_interval: float = 0.5
@@ -38,6 +40,11 @@ class Config:
     # Percent of darkest/lightest pixels ignored when stretching levels.
     autocontrast_cutoff: float = 1.0
     sharpen: bool = True
+    # Straighten the page and crop away the scanner backing around it.
+    deskew: bool = True
+    autocrop: bool = True
+    max_skew_deg: float = 5.0
+    crop_inset_mm: float = 1.0
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -62,4 +69,8 @@ class Config:
             enhance=_env_bool("ENHANCE", cls.enhance),
             autocontrast_cutoff=float(env.get("AUTOCONTRAST_CUTOFF", cls.autocontrast_cutoff)),
             sharpen=_env_bool("SHARPEN", cls.sharpen),
+            deskew=_env_bool("DESKEW", cls.deskew),
+            autocrop=_env_bool("AUTOCROP", cls.autocrop),
+            max_skew_deg=float(env.get("MAX_SKEW_DEG", cls.max_skew_deg)),
+            crop_inset_mm=float(env.get("CROP_INSET_MM", cls.crop_inset_mm)),
         )

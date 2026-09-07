@@ -13,9 +13,10 @@ folder. Paperless does the OCR. Everything runs in one Docker container.
 3. On a button press with paper in the feeder it scans every sheet
    (`ADF Duplex`, `Color`, 300 dpi by default).
 4. Each page is rotated 180 degrees (ScanSnap feeds pages upside down),
-   auto-levelled so the paper is white and the ink black, and lightly
-   sharpened. Then the pages are encoded as JPEG and wrapped into a PDF with
-   `img2pdf`.
+   auto-levelled so the paper is white and the ink black, straightened and
+   cropped to the sheet (the scan window is wider than the paper, so the grey
+   scanner backing would otherwise show), and lightly sharpened. Then the
+   pages are encoded as JPEG and wrapped into a PDF with `img2pdf`.
 5. The PDF is written to a hidden temp dir inside the consume folder, chowned
    to the paperless user and atomically renamed into place as
    `Scan_YYYY-MM-DD_HH-MM-SS.pdf`. Paperless picks it up via inotify.
@@ -30,7 +31,7 @@ docker-compose.yml       standalone compose for this repo
 firmware/1300_0C26.nal   proprietary S1300 firmware (see below)
 sane/dll.conf            load only the epjitsu backend
 sane/epjitsu.conf        firmware path + USB id 04c5:11ed
-documentscan/            the daemon (config, scanner, enhance, pdf, uploader, daemon)
+documentscan/            the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon)
 tests/                   pytest units that need no hardware
 ```
 
@@ -85,7 +86,7 @@ every time the lid is closed and opened.
 | `SCAN_SOURCE` | `ADF Duplex` | `ADF Front`, `ADF Back` or `ADF Duplex` |
 | `SCAN_MODE` | `Color` | `Lineart`, `Gray` or `Color` |
 | `SCAN_RESOLUTION` | `300` | dpi, 50 to 600 |
-| `PAGE_WIDTH_MM` | `210` | scan width (A4) |
+| `PAGE_WIDTH_MM` | `219` | scan width; wider than A4 so the sheet is always fully captured, the backing is cropped away |
 | `PAGE_HEIGHT_MM` | `0` | `0` lets the scanner detect the page length |
 | `POLL_INTERVAL` | `0.5` | seconds between button polls |
 | `FILENAME_PREFIX` | `Scan` | prefix of the delivered PDF |
@@ -94,7 +95,11 @@ every time the lid is closed and opened.
 | `ROTATE_BACK` | `180` | degrees to rotate back sides in duplex mode |
 | `ENHANCE` | `true` | auto-levels + sharpening; `false` keeps the raw scan |
 | `AUTOCONTRAST_CUTOFF` | `1.0` | percent of brightest pixels treated as paper white; raise if backgrounds stay grey, lower if light colours wash out |
-| `SHARPEN` | `true` | unsharp mask after auto-levels |
+| `SHARPEN` | `true` | unsharp mask, applied last |
+| `DESKEW` | `true` | straighten the page using its edges against the backing |
+| `AUTOCROP` | `true` | crop to the detected sheet |
+| `MAX_SKEW_DEG` | `5` | larger detected angles are ignored as misdetections |
+| `CROP_INSET_MM` | `1.0` | trim this much inside the detected edge to hide edge shadows |
 | `SCAN_ON_PAPER_INSERT` | `false` | also start scanning when paper is inserted |
 | `SANE_DEVICE` | unset | force a SANE device name instead of the first `epjitsu:` one |
 | `LOG_LEVEL` | `INFO` | `DEBUG` prints every option set |
@@ -128,6 +133,15 @@ Note: only one process can hold the scanner, so stop the daemon
 - **Pages come out upside down or sideways**: adjust `ROTATE_FRONT` /
   `ROTATE_BACK`. Paperless's own OCR-based auto-rotation only fixes the
   archived copy and needs enough text to be confident.
+- **Grey borders or a slanted page**: deskew/crop looks for the scanner
+  backing around the sheet by walking inward from each image border, so it
+  needs the scan window to be wider than the paper (`PAGE_WIDTH_MM` defaults
+  to 219 for that reason). A side where the sheet reaches the image border is
+  left uncropped. Set `LOG_LEVEL=DEBUG` to see which edges were found and
+  why others were rejected; `AUTOCROP=false` / `DESKEW=false` turn it off.
+- **Feed skew**: sheet-fed scanners let the paper turn slightly while it is
+  pulled through, so the top and bottom edges rarely agree exactly; the
+  daemon uses the long side edges as the main reference.
 - **Colours look washed out or the background stays grey**: tune
   `AUTOCONTRAST_CUTOFF`, or set `ENHANCE=false` to get the raw scanner output.
 - **PDF appears in the consume folder but paperless does not import it**:
