@@ -21,7 +21,9 @@ folder. Paperless does the OCR. Everything runs in one Docker container.
    to the paperless user and atomically renamed into place as
    `Scan_YYYY-MM-DD_HH-MM-SS.pdf`. Paperless picks it up via inotify.
 6. If the scanner disappears (lid closed, unplugged, power save) the daemon
-   reconnects with backoff.
+   reconnects with backoff. Each connection attempt runs in a fresh worker
+   process (libsane leaks a libusb context per init/teardown, see
+   Troubleshooting); the main process never touches SANE.
 
 ## Layout
 
@@ -150,6 +152,16 @@ Note: only one process can hold the scanner, so stop the daemon
 - **`no scanner found` in the logs**: lid closed (the S1300 powers off and drops
   off the USB bus), cable unplugged, or `/dev/bus/usb` not passed through. The
   daemon retries automatically.
+- **Lid open, LED flashing, button does nothing, logs keep saying `Scanner not
+  found`**: the flashing LED means nobody has uploaded the firmware, i.e. the
+  daemon does not see the scanner although Linux does (`lsusb` lists it).
+  `docker exec documentscan scanimage -L` should list it; if it does, the
+  daemon process is wedged: `docker restart documentscan`. Every connection
+  attempt now runs in a fresh worker process precisely because libsane leaks a
+  libusb context (two file descriptors) per init/teardown cycle, which used to
+  exhaust the open-file limit after a few hours of retrying with the lid
+  closed. Check with `docker exec documentscan sh -c 'ls /proc/1/fd | wc -l'`;
+  it should stay in the single digits.
 - **Button press does nothing**: check `docker logs documentscan`. A press
   with an empty feeder is logged and ignored.
 - **Pages come out upside down or sideways**: adjust `ROTATE_FRONT` /

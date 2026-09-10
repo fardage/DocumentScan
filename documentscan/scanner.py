@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import sane
+from _sane import error as SaneError  # python-sane 2.9 does not re-export this as sane.error
 from PIL import Image
 
 from .config import Config
@@ -44,7 +45,7 @@ def _node_identity(path: str) -> tuple[int, int]:
 class Scanner:
     """Owns one open SANE device handle.
 
-    Any :class:`sane.error` raised by the methods here means the device handle is
+    Any :class:`SaneError` raised by the methods here means the device handle is
     unusable (unplugged, powered off, I/O error) and the caller should
     :meth:`close` and reconnect.
     """
@@ -63,7 +64,7 @@ class Scanner:
         sane.init()
         try:
             devices = sane.get_devices()
-        except sane.error as exc:
+        except SaneError as exc:
             sane.exit()
             raise ScannerNotFound(f"SANE device enumeration failed: {exc}") from exc
 
@@ -96,7 +97,7 @@ class Scanner:
         name, vendor, model, _kind = chosen
         try:
             self.dev = sane.open(name)
-        except sane.error as exc:
+        except SaneError as exc:
             sane.exit()
             raise ScannerNotFound(f"could not open {name}: {exc}") from exc
         self.name = name
