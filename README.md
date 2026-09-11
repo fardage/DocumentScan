@@ -13,10 +13,14 @@ folder. Paperless does the OCR. Everything runs in one Docker container.
 3. On a button press with paper in the feeder it scans every sheet
    (`ADF Duplex`, `Color`, 300 dpi by default).
 4. Each page is rotated 180 degrees (ScanSnap feeds pages upside down),
-   auto-levelled so the paper is white and the ink black, straightened and
-   cropped to the sheet (the scan window is wider than the paper, so the grey
-   scanner backing would otherwise show), and lightly sharpened. Then the
-   pages are encoded as JPEG and wrapped into a PDF with `img2pdf`.
+   straightened and cropped to the sheet (the scan window is wider than the
+   paper, so the grey scanner backing would otherwise show), then cleaned up
+   the way ScanSnap Manager does it: the paper colour and sensor noise are
+   measured from the histogram, the image is denoised, white-balanced and
+   levelled so the paper is pure white and the ink black, and sharpened last.
+   Pages without coloured content are stored as greyscale, blank pages are
+   dropped. Then the pages are encoded as JPEG and wrapped into a PDF with
+   `img2pdf`.
 5. The PDF is written to a hidden temp dir inside the consume folder, chowned
    to the paperless user and atomically renamed into place as
    `Scan_YYYY-MM-DD_HH-MM-SS.pdf`. Paperless picks it up via inotify.
@@ -117,9 +121,14 @@ delivered PDF is chowned to them.
 | `JPEG_QUALITY` | `85` | JPEG quality of the embedded pages |
 | `ROTATE_FRONT` | `180` | degrees to rotate front sides (0, 90, 180, 270) |
 | `ROTATE_BACK` | `180` | degrees to rotate back sides in duplex mode |
-| `ENHANCE` | `true` | auto-levels + sharpening; `false` keeps the raw scan |
-| `AUTOCONTRAST_CUTOFF` | `1.0` | percent of brightest pixels treated as paper white; raise if backgrounds stay grey, lower if light colours wash out |
-| `SHARPEN` | `true` | unsharp mask, applied last |
+| `ENHANCE` | `true` | denoise, white-balance and level the page so the paper is white; `false` keeps the raw scan |
+| `DENOISE` | `true` | median filter on luminance, blur on the colour channels, before levelling |
+| `WHITE_MARGIN` | `3.0` | pixels brighter than the paper level minus this many noise standard deviations become white; raise if specks or bleed-through remain, lower if very light print disappears |
+| `SHARPEN` | `true` | unsharp mask, applied last, with a threshold above the measured noise |
+| `AUTO_COLOR` | `true` | store pages without coloured content as greyscale |
+| `DROP_BLANK_PAGES` | `true` | drop pages with (almost) no ink, e.g. the backs of single-sided sheets; if every page is blank they are all kept |
+| `BLANK_INK_PERCENT` | `0.02` | a page with less ink than this percent of its area counts as blank |
+| `COLOR_PERCENT` | `0.01` | a page with more clearly saturated pixels than this percent counts as coloured |
 | `DESKEW` | `true` | straighten the page using its edges against the backing |
 | `AUTOCROP` | `true` | crop to the detected sheet |
 | `MAX_SKEW_DEG` | `5` | larger detected angles are ignored as misdetections |
@@ -176,8 +185,20 @@ Note: only one process can hold the scanner, so stop the daemon
 - **Feed skew**: sheet-fed scanners let the paper turn slightly while it is
   pulled through, so the top and bottom edges rarely agree exactly; the
   daemon uses the long side edges as the main reference.
-- **Colours look washed out or the background stays grey**: tune
-  `AUTOCONTRAST_CUTOFF`, or set `ENHANCE=false` to get the raw scanner output.
+- **Grainy or grey paper, blue tint**: that is the raw sensor output of the
+  S1300 (noise standard deviation around 8 levels, back side darker and bluer
+  than the front). The epjitsu backend has no brightness, contrast or gamma
+  controls, so all clean-up happens in the daemon (`ENHANCE`). The log line
+  per page shows the measured paper colour and noise and the resulting kind
+  (`color`, `gray`, `blank`). If specks or bleed-through remain, raise
+  `WHITE_MARGIN`; if very light print disappears, lower it. `ENHANCE=false`
+  gives the raw scanner output.
+- **A page came out greyscale although it has colour, or a page is missing**:
+  colour detection needs more than `COLOR_PERCENT` of the pixels to be clearly
+  saturated and blank detection drops pages with less than `BLANK_INK_PERCENT`
+  ink; lower or raise them, or turn off `AUTO_COLOR` / `DROP_BLANK_PAGES`.
+- **Streaks along the paper direction**: dust on the glass strips or the white
+  calibration strips inside the scanner; clean them with a lint-free cloth.
 - **PDF appears in the consume folder but paperless does not import it**:
   check `docker logs paperless`; the file must be owned by the paperless user
   (`PUID`/`PGID`).

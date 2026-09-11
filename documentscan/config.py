@@ -36,10 +36,23 @@ class Config:
     # Image processing. ScanSnap feeds pages so they come out upside down.
     rotate_front: int = 180
     rotate_back: int = 180
+    # Paper whitening, denoising, sharpening and page classification.
     enhance: bool = True
-    # Percent of darkest/lightest pixels ignored when stretching levels.
-    autocontrast_cutoff: float = 1.0
+    denoise: bool = True
+    # Pixels brighter than the paper level minus this many noise standard
+    # deviations become pure white. Raise if backgrounds keep specks or show
+    # the other side, lower if very light print disappears.
+    white_margin: float = 3.0
     sharpen: bool = True
+    # Store pages without coloured content as greyscale.
+    auto_color: bool = True
+    # Drop pages with less ink than this percent of their area (after the
+    # noise has been removed). A few characters are about 0.02 percent.
+    drop_blank_pages: bool = True
+    blank_ink_percent: float = 0.02
+    # A page counts as coloured if more than this percent of its pixels are
+    # clearly saturated.
+    color_percent: float = 0.01
     # Straighten the page and crop away the scanner backing around it.
     deskew: bool = True
     autocrop: bool = True
@@ -67,8 +80,13 @@ class Config:
             rotate_front=int(env.get("ROTATE_FRONT", cls.rotate_front)),
             rotate_back=int(env.get("ROTATE_BACK", cls.rotate_back)),
             enhance=_env_bool("ENHANCE", cls.enhance),
-            autocontrast_cutoff=float(env.get("AUTOCONTRAST_CUTOFF", cls.autocontrast_cutoff)),
+            denoise=_env_bool("DENOISE", cls.denoise),
+            white_margin=float(env.get("WHITE_MARGIN", cls.white_margin)),
             sharpen=_env_bool("SHARPEN", cls.sharpen),
+            auto_color=_env_bool("AUTO_COLOR", cls.auto_color),
+            drop_blank_pages=_env_bool("DROP_BLANK_PAGES", cls.drop_blank_pages),
+            blank_ink_percent=float(env.get("BLANK_INK_PERCENT", cls.blank_ink_percent)),
+            color_percent=float(env.get("COLOR_PERCENT", cls.color_percent)),
             deskew=_env_bool("DESKEW", cls.deskew),
             autocrop=_env_bool("AUTOCROP", cls.autocrop),
             max_skew_deg=float(env.get("MAX_SKEW_DEG", cls.max_skew_deg)),

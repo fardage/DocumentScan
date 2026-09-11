@@ -94,4 +94,4 @@ def test_pipeline_end_to_end():
     cfg = Config(scan_resolution=DPI, rotate_front=0, rotate_back=0)
     (out,) = process_pages([_scan(-1.0)], cfg)
     _assert_cropped_to_page(out)
-    assert out.getpixel((5, 5))[0] > 240
+    assert out.convert("L").getpixel((5, 5)) > 240  # cleaned pages may be greyscale
