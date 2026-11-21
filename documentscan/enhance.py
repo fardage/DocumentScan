@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal, Sequence, TypeVar
 
 import numpy as np
 from PIL import Image, ImageChops, ImageFilter
@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 DUPLEX_SOURCE = "ADF Duplex"
 PageKind = Literal["color", "gray", "blank"]
+T = TypeVar("T")
 
 LUMA = (0.299, 0.587, 0.114)
 PAPER_MIN_LEVEL = 128      # the paper peak is searched above this luminance
@@ -47,6 +48,7 @@ SHARPEN_MIN_THRESHOLD = 3
 INK_LEVEL = 128            # luminance below which a pixel counts as ink
 COLOR_CHROMA = 60          # channel spread above which a pixel counts as coloured ...
 COLOR_MAX_LEVEL = 220      # ... if it is also darker than this
+MEDIAN_STRIP_ROWS = 256    # the median filter works on strips this high
 
 
 @dataclass(frozen=True)
@@ -126,8 +128,22 @@ def median3x3(a: np.ndarray) -> np.ndarray:
 
     Pillow's MedianFilter sorts every neighbourhood individually and needs
     almost two seconds per page; whole-array min/max operations do the same
-    work in a fraction of that.
+    work in a fraction of that. The network needs nine copies of its input,
+    so the array is filtered in horizontal strips (each with one row of
+    overlap on either side) to keep that within the memory of a Pi Zero.
     """
+    h = a.shape[0]
+    if h <= MEDIAN_STRIP_ROWS:
+        return _median3x3(a)
+    out = np.empty_like(a)
+    for y0 in range(0, h, MEDIAN_STRIP_ROWS):
+        y1 = min(y0 + MEDIAN_STRIP_ROWS, h)
+        lo, hi = max(y0 - 1, 0), min(y1 + 1, h)
+        out[y0:y1] = _median3x3(a[lo:hi])[y0 - lo:y1 - lo]
+    return out
+
+
+def _median3x3(a: np.ndarray) -> np.ndarray:
     v = [view.copy() for view in _neighbourhoods(a, "edge")]
 
     def cx(i: int, j: int) -> None:
@@ -235,53 +251,54 @@ def clean_page(image: Image.Image, config: Config) -> tuple[Image.Image, PageKin
     return image, kind, paper
 
 
-def process_pages(images: Sequence[Image.Image], config: Config) -> list[Image.Image]:
-    """Rotate, deskew/crop, clean and classify every page; drop blank ones.
+def process_page(image: Image.Image, index: int, config: Config) -> tuple[Image.Image, PageKind]:
+    """Rotate, deskew/crop, clean and classify the page at ``index`` of a scan.
 
     In duplex mode the backend alternates front/back sides, so even indices
-    are fronts and odd indices are backs; other sources are all fronts. If
-    every page is blank they are all kept: the user pressed the button, so
-    something is better than nothing.
+    are fronts and odd indices are backs; other sources are all fronts.
     """
     duplex = config.scan_source == DUPLEX_SOURCE
-    inset_px = int(round(config.crop_inset_mm / 25.4 * config.scan_resolution))
-    processed: list[tuple[Image.Image, PageKind]] = []
-    for index, image in enumerate(images):
-        side = "back" if duplex and index % 2 == 1 else "front"
-        degrees = config.rotate_back if side == "back" else config.rotate_front
-        page = rotate(image, degrees)
-        if config.deskew or config.autocrop:
-            page = deskew_and_crop(
-                page,
-                deskew=config.deskew,
-                crop=config.autocrop,
-                max_angle=config.max_skew_deg,
-                inset_px=inset_px,
-            )
-        if config.enhance:
-            page, kind, paper = clean_page(page, config)
-            log.info(
-                "Page %d (%s): paper rgb=(%.0f, %.0f, %.0f) noise=%.1f -> %s",
-                index + 1, side, *paper.color, paper.sigma, kind,
-            )
-        else:
-            kind = classify(page, config.blank_ink_percent, config.color_percent)
-            if kind == "gray" and config.auto_color:
-                page = page.convert("L")
-            log.info("Page %d (%s): %s", index + 1, side, kind)
-        processed.append((page, kind))
+    side = "back" if duplex and index % 2 == 1 else "front"
+    degrees = config.rotate_back if side == "back" else config.rotate_front
+    page = rotate(image, degrees)
+    if config.deskew or config.autocrop:
+        page = deskew_and_crop(
+            page,
+            deskew=config.deskew,
+            crop=config.autocrop,
+            max_angle=config.max_skew_deg,
+            inset_px=int(round(config.crop_inset_mm / 25.4 * config.scan_resolution)),
+        )
+    if config.enhance:
+        page, kind, paper = clean_page(page, config)
+        log.info(
+            "Page %d (%s): paper rgb=(%.0f, %.0f, %.0f) noise=%.1f -> %s",
+            index + 1, side, *paper.color, paper.sigma, kind,
+        )
+    else:
+        kind = classify(page, config.blank_ink_percent, config.color_percent)
+        if kind == "gray" and config.auto_color:
+            page = page.convert("L")
+        log.info("Page %d (%s): %s", index + 1, side, kind)
+    return page, kind
 
+
+def select_pages(processed: Sequence[tuple[T, PageKind]], config: Config) -> list[T]:
+    """Drop blank pages from ``(page, kind)`` pairs.
+
+    The pages can be images or already encoded JPEGs. If every page is blank
+    they are all kept: the user pressed the button, so something is better
+    than nothing.
+    """
     kept = [page for page, kind in processed if not (config.drop_blank_pages and kind == "blank")]
     if not kept:
         log.warning("All %d pages look blank; keeping them anyway", len(processed))
         kept = [page for page, _kind in processed]
     elif len(kept) < len(processed):
         log.info("Dropped %d blank page(s)", len(processed) - len(kept))
-    log.debug(
-        "Processed %d pages (rotate front=%d back=%d, enhance=%s, denoise=%s, white_margin=%.1f, "
-        "sharpen=%s, deskew=%s, autocrop=%s, auto_color=%s, drop_blank=%s)",
-        len(processed), config.rotate_front, config.rotate_back, config.enhance, config.denoise,
-        config.white_margin, config.sharpen, config.deskew, config.autocrop, config.auto_color,
-        config.drop_blank_pages,
-    )
     return kept
+
+
+def process_pages(images: Sequence[Image.Image], config: Config) -> list[Image.Image]:
+    """Process every page (see :func:`process_page`) and drop blank ones."""
+    return select_pages([process_page(image, index, config) for index, image in enumerate(images)], config)

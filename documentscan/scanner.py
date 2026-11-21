@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, Iterator
 
 import sane
 from _sane import error as SaneError  # python-sane 2.9 does not re-export this as sane.error
@@ -186,18 +186,23 @@ class Scanner:
         # page_height 0 lets epjitsu detect the page length itself.
         self._set_option("page_height", cfg.page_height_mm)
 
-    def scan_pages(self) -> list[Image.Image]:
-        """Scan every sheet in the feeder and return the page images in order."""
+    def iter_pages(self) -> Iterator[Image.Image]:
+        """Scan every sheet in the feeder, yielding each page as soon as it is read.
+
+        The next page is only read when the caller asks for it, so pages can be
+        processed one at a time instead of all being held in memory; the paper
+        simply waits in the feeder meanwhile.
+        """
         self._apply_scan_settings()
-        pages: list[Image.Image] = []
-        iterator = self.dev.multi_scan()
+        count = 0
         try:
-            for image in iterator:
-                pages.append(image.copy())
-                log.info("Scanned page %d (%dx%d, %s)", len(pages), image.width, image.height, image.mode)
+            for image in self.dev.multi_scan():
+                count += 1
+                log.info("Scanned page %d (%dx%d, %s)", count, image.width, image.height, image.mode)
+                yield image
+                del image  # don't hold the raw page while the next one is read
         finally:
             try:
                 self.dev.cancel()
             except Exception:  # noqa: BLE001
                 pass
-        return pages

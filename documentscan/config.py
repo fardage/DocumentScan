@@ -15,7 +15,8 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Config:
-    consume_dir: str = "/consume"
+    # Finished PDFs are written here.
+    output_dir: str = "/var/lib/documentscan/outbox"
     sane_device: str | None = None
     scan_source: str = "ADF Duplex"
     scan_mode: str = "Color"
@@ -26,8 +27,6 @@ class Config:
     # 0 = let the scanner detect the page length.
     page_height_mm: float = 0.0
     poll_interval: float = 0.5
-    puid: int = 1001
-    pgid: int = 1001
     filename_prefix: str = "Scan"
     jpeg_quality: int = 85
     log_level: str = "INFO"
@@ -63,7 +62,7 @@ class Config:
     def from_env(cls) -> "Config":
         env = os.environ
         return cls(
-            consume_dir=env.get("CONSUME_DIR", cls.consume_dir),
+            output_dir=env.get("OUTPUT_DIR", cls.output_dir),
             sane_device=env.get("SANE_DEVICE") or None,
             scan_source=env.get("SCAN_SOURCE", cls.scan_source),
             scan_mode=env.get("SCAN_MODE", cls.scan_mode),
@@ -71,8 +70,6 @@ class Config:
             page_width_mm=float(env.get("PAGE_WIDTH_MM", cls.page_width_mm)),
             page_height_mm=float(env.get("PAGE_HEIGHT_MM", cls.page_height_mm)),
             poll_interval=float(env.get("POLL_INTERVAL", cls.poll_interval)),
-            puid=int(env.get("PUID", cls.puid)),
-            pgid=int(env.get("PGID", cls.pgid)),
             filename_prefix=env.get("FILENAME_PREFIX", cls.filename_prefix),
             jpeg_quality=int(env.get("JPEG_QUALITY", cls.jpeg_quality)),
             log_level=env.get("LOG_LEVEL", cls.log_level).upper(),

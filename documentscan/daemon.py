@@ -1,4 +1,4 @@
-"""Main loop: wait for the scanner button, scan, build a PDF, drop it in paperless.
+"""Main loop: wait for the scanner button, scan, build a PDF, drop it in the outbox.
 
 The process is split in two:
 
@@ -59,14 +59,14 @@ class Daemon:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
         log.info(
-            "DocumentScan starting: source=%r mode=%r dpi=%d rotate=%d/%d enhance=%s consume_dir=%s",
+            "DocumentScan starting: source=%r mode=%r dpi=%d rotate=%d/%d enhance=%s output_dir=%s",
             self.config.scan_source,
             self.config.scan_mode,
             self.config.scan_resolution,
             self.config.rotate_front,
             self.config.rotate_back,
             self.config.enhance,
-            self.config.consume_dir,
+            self.config.output_dir,
         )
 
         backoff = BACKOFF_MIN
@@ -214,24 +214,27 @@ class _Session:
             paper_was_loaded = scanner.page_loaded()
 
     def _scan_and_deliver(self, scanner) -> None:
-        from .enhance import process_pages  # noqa: PLC0415
-        from .pdf import images_to_pdf  # noqa: PLC0415
+        from .enhance import process_page, select_pages  # noqa: PLC0415
+        from .pdf import encode_page, jpegs_to_pdf  # noqa: PLC0415
         from .uploader import deliver  # noqa: PLC0415
 
+        cfg = self.config
         started = time.monotonic()
-        pages = scanner.scan_pages()
-        if not pages:
-            log.warning("Scan finished with no pages; nothing to upload")
+        # Each page is processed and JPEG-encoded as soon as it is scanned, so
+        # only compressed pages pile up: a raw 300 dpi colour side is about
+        # 27 MB, and a Pi Zero cannot hold a whole batch of those.
+        processed = []
+        for index, image in enumerate(scanner.iter_pages()):
+            page, kind = process_page(image, index, cfg)
+            del image
+            processed.append((encode_page(page, cfg.scan_resolution, cfg.jpeg_quality), kind))
+            del page
+        if not processed:
+            log.warning("Scan finished with no pages; nothing to deliver")
             return
-        pages = process_pages(pages, self.config)
-        pdf = images_to_pdf(pages, self.config.scan_resolution, self.config.jpeg_quality)
-        path = deliver(
-            pdf,
-            self.config.consume_dir,
-            self.config.filename_prefix,
-            self.config.puid,
-            self.config.pgid,
-        )
+        pages = select_pages(processed, cfg)
+        pdf = jpegs_to_pdf(pages)
+        path = deliver(pdf, cfg.output_dir, cfg.filename_prefix)
         log.info(
             "Delivered %s (%d pages, %.1f MB) in %.1fs",
             path,

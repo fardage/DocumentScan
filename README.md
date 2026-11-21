@@ -1,13 +1,13 @@
 # DocumentScan
 
 Press the button on a Fujitsu ScanSnap S1300 and the document is scanned in
-colour, duplex, turned into a PDF and dropped into the paperless-ngx consume
-folder. Paperless does the OCR. Everything runs in one Docker container.
+colour, duplex and turned into a PDF in a local outbox folder. It runs as a
+systemd service on a Raspberry Pi (a Zero 2 W is enough) next to the scanner.
 
 ## How it works
 
-1. The container owns the scanner via USB passthrough and SANE's `epjitsu`
-   backend (firmware baked into the image).
+1. SANE's `epjitsu` backend drives the scanner over USB, with the firmware
+   shipped in this repository.
 2. A small Python daemon keeps the device open and polls the backend's
    read-only `scan` (button) and `page-loaded` sensors twice a second.
 3. On a button press with paper in the feeder it scans every sheet
@@ -20,27 +20,30 @@ folder. Paperless does the OCR. Everything runs in one Docker container.
    levelled so the paper is pure white and the ink black, and sharpened last.
    Pages without coloured content are stored as greyscale, blank pages are
    dropped. Then the pages are encoded as JPEG and wrapped into a PDF with
-   `img2pdf`.
-5. The PDF is written to a hidden temp dir inside the consume folder, chowned
-   to the paperless user and atomically renamed into place as
-   `Scan_YYYY-MM-DD_HH-MM-SS.pdf`. Paperless picks it up via inotify.
+   `img2pdf`. Pages are processed one at a time while the next sheet waits in
+   the feeder, so only the compressed pages of a batch are held in memory.
+5. The PDF is written to a hidden temp dir inside the outbox, fsynced and
+   atomically renamed into place as `Scan_YYYY-MM-DD_HH-MM-SS.pdf`.
 6. If the scanner disappears (lid closed, unplugged, power save) the daemon
    reconnects with backoff. Each connection attempt runs in a fresh worker
    process (libsane leaks a libusb context per init/teardown, see
    Troubleshooting); the main process never touches SANE.
 
+On a Pi Zero 2 W a 300 dpi colour page takes about 12 seconds to process and
+the daemon peaks at roughly 200 MB.
+
 ## Layout
 
 ```
-Dockerfile               debian:trixie-slim + sane + python3-sane + img2pdf
-docker-compose.yml       standalone compose for this repo
-firmware/1300_0C26.nal   proprietary S1300 firmware (see below)
-sane/dll.conf            load only the epjitsu backend
-sane/epjitsu.conf        firmware path + USB id 04c5:11ed
-documentscan/            the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon)
-host/                    udev rule that makes the scanner accessible to the container user
-paperless/               post-consume script sending a Telegram message per document
-tests/                   pytest units that need no hardware
+deploy/install.sh            install or update the service (run with sudo)
+deploy/documentscan.service  systemd unit (own user, hardened, memory-limited)
+deploy/documentscan.env      template for /etc/documentscan.env overrides
+firmware/1300_0C26.nal       proprietary S1300 firmware (see below)
+sane/dll.conf                load only the epjitsu backend
+sane/epjitsu.conf            firmware path + USB id 04c5:11ed
+documentscan/                the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon)
+paperless/                   post-consume script sending a Telegram message per document
+tests/                       pytest units that need no hardware
 ```
 
 ## Firmware
@@ -51,66 +54,38 @@ licence; the copy in `firmware/` was taken from the community mirror
 <https://github.com/stevleibelt/scansnap-firmware>
 (65793 bytes, sha256
 `d693c9150fb00442d3f33f103ffb028410cd3cc53cf3d6df0817fb9d596b17f3`).
-If you have your own copy from the driver, replace the file and rebuild.
+If you have your own copy from the driver, replace the file and reinstall.
 
-## Running
+## Installing
 
-In `/srv/docker/docker-compose.yml` the service is defined as:
-
-```yaml
-  documentscan:
-    build: /home/marvintseng/git/DocumentScan
-    image: documentscan:local
-    container_name: documentscan
-    restart: unless-stopped
-    environment:
-      - TZ=Europe/Zurich
-      - PUID=1001
-      - PGID=1001
-    volumes:
-      - /srv/docker/paperless/consume:/consume
-      - /dev/bus/usb:/dev/bus/usb
-    device_cgroup_rules:
-      - 'c 189:* rmw'
-```
+On the Pi (Debian trixie / Raspberry Pi OS), from a checkout of this
+repository:
 
 ```sh
-cd /srv/docker
-docker compose build documentscan
-docker compose up -d documentscan
-docker logs -f documentscan
+sudo deploy/install.sh
+journalctl -u documentscan -f
 ```
 
-### Running without root
+The script installs the Debian packages (`python3-sane`, `python3-pil`,
+`python3-numpy`, `img2pdf`), creates the `documentscan` system user, copies
+the daemon, SANE config and firmware to `/opt/documentscan` and enables the
+service. Run it again after pulling changes. `/etc/documentscan.env` is only
+created once, so local overrides survive updates.
 
-The container runs as the paperless user (uid/gid 1001) with all
-capabilities dropped, `no-new-privileges`, a read-only root filesystem and a
-memory limit. For that user to open the scanner, the host needs the udev rule
-in `host/60-scansnap-s1300.rules`, which gives the S1300's USB node to group
-1001 on every (re)enumeration:
-
-```sh
-sudo cp host/60-scansnap-s1300.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=04c5 --attr-match=idProduct=11ed
-ls -l /dev/bus/usb/001/   # scanner node should be root:mediaservices, mode 660
-```
-
-Only the scanner's USB bus (`/dev/bus/usb/001`) is mounted, not every USB
-device; the `device_cgroup_rules` line still names major 189 because device
-numbers on that bus change whenever the lid is closed and opened. If the
-scanner is ever moved to another port, check `lsusb` for its bus number and
-adjust the mount.
-
-`PUID`/`PGID` only matter if you run the container as root instead; then the
-delivered PDF is chowned to them.
+The service runs as `documentscan` with no capabilities, a read-only system,
+access to USB devices only and a memory limit. Debian's libsane udev rule
+gives scanner USB nodes to the `scanner` group, which the service joins; no
+extra udev rule is needed. SANE reads its config from
+`/opt/documentscan/sane` (`SANE_CONFIG_DIR`), so the system-wide
+`/etc/sane.d` is left alone. PDFs land in `/var/lib/documentscan/outbox`.
 
 ## Configuration (environment variables)
 
+Set them in `/etc/documentscan.env` and `sudo systemctl restart documentscan`.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CONSUME_DIR` | `/consume` | paperless consume folder inside the container |
-| `PUID` / `PGID` | `1001` / `1001` | owner to chown the PDF to, only when running as root |
+| `OUTPUT_DIR` | `/var/lib/documentscan/outbox` | where finished PDFs are written |
 | `SCAN_SOURCE` | `ADF Duplex` | `ADF Front`, `ADF Back` or `ADF Duplex` |
 | `SCAN_MODE` | `Color` | `Lineart`, `Gray` or `Color` |
 | `SCAN_RESOLUTION` | `300` | dpi, 50 to 600 |
@@ -136,42 +111,42 @@ delivered PDF is chowned to them.
 | `SCAN_ON_PAPER_INSERT` | `false` | also start scanning when paper is inserted |
 | `SANE_DEVICE` | unset | force a SANE device name instead of the first `epjitsu:` one |
 | `LOG_LEVEL` | `INFO` | `DEBUG` prints every option set |
-| `TZ` | unset | timezone used for the file name timestamp |
+| `TZ` | system timezone | timezone used for the file name timestamp |
 
 ## Manual checks
 
 ```sh
-cd /srv/docker
+# SANE with the service's config:
+export SANE_CONFIG_DIR=/opt/documentscan/sane
 # Scanner visible + firmware accepted?
-docker compose run --rm documentscan scanimage -L
+scanimage -L
 # All options incl. sensors (scan button, page-loaded, cover-open):
-docker compose run --rm documentscan scanimage -A
-# One manual duplex colour scan to /tmp inside the container:
-docker compose run --rm documentscan scanimage --source "ADF Duplex" --mode Color \
-    --resolution 300 --batch=/tmp/page%d.pnm
-# Unit tests:
-docker compose run --rm -v "$PWD/tests:/app/tests:ro" documentscan python3 -m pytest /app/tests
+scanimage -A
+# One manual duplex colour scan to /tmp:
+scanimage --source "ADF Duplex" --mode Color --resolution 300 --batch=/tmp/page%d.pnm
+# Unit tests, from the repository (needs python3-pytest):
+python3 -m pytest tests
 ```
 
 Note: only one process can hold the scanner, so stop the daemon
-(`docker compose stop documentscan`) before running `scanimage` by hand.
+(`sudo systemctl stop documentscan`) before running `scanimage` by hand.
 
 ## Troubleshooting
 
 - **`no scanner found` in the logs**: lid closed (the S1300 powers off and drops
-  off the USB bus), cable unplugged, or `/dev/bus/usb` not passed through. The
-  daemon retries automatically.
+  off the USB bus), cable unplugged, or the service user is not in the `scanner`
+  group. The daemon retries automatically.
 - **Lid open, LED flashing, button does nothing, logs keep saying `Scanner not
   found`**: the flashing LED means nobody has uploaded the firmware, i.e. the
   daemon does not see the scanner although Linux does (`lsusb` lists it).
-  `docker exec documentscan scanimage -L` should list it; if it does, the
-  daemon process is wedged: `docker restart documentscan`. Every connection
+  `scanimage -L` (with `SANE_CONFIG_DIR` as above) should list it; if it
+  does, the daemon process is wedged: `sudo systemctl restart documentscan`. Every connection
   attempt now runs in a fresh worker process precisely because libsane leaks a
   libusb context (two file descriptors) per init/teardown cycle, which used to
   exhaust the open-file limit after a few hours of retrying with the lid
-  closed. Check with `docker exec documentscan sh -c 'ls /proc/1/fd | wc -l'`;
+  closed. Check with `sudo ls /proc/$(systemctl show -p MainPID --value documentscan)/fd | wc -l`;
   it should stay in the single digits.
-- **Button press does nothing**: check `docker logs documentscan`. A press
+- **Button press does nothing**: check `journalctl -u documentscan`. A press
   with an empty feeder is logged and ignored.
 - **Pages come out upside down or sideways**: adjust `ROTATE_FRONT` /
   `ROTATE_BACK`. Paperless's own OCR-based auto-rotation only fixes the
@@ -199,6 +174,6 @@ Note: only one process can hold the scanner, so stop the daemon
   ink; lower or raise them, or turn off `AUTO_COLOR` / `DROP_BLANK_PAGES`.
 - **Streaks along the paper direction**: dust on the glass strips or the white
   calibration strips inside the scanner; clean them with a lint-free cloth.
-- **PDF appears in the consume folder but paperless does not import it**:
-  check `docker logs paperless`; the file must be owned by the paperless user
-  (`PUID`/`PGID`).
+- **Service killed or Pi sluggish during big scans**: the unit caps memory at
+  350 MB (`MemoryMax`). Lower `SCAN_RESOLUTION`, or free memory by booting
+  without the desktop (`sudo systemctl set-default multi-user.target`).

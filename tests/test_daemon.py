@@ -158,3 +158,38 @@ def test_supervisor_terminates_hung_worker(monkeypatch):
     started = time.monotonic()
     assert d.run() == 0
     assert time.monotonic() - started < 5
+
+
+def test_scan_streams_pages_into_one_pdf(tmp_path: Path):
+    """Pages are processed one by one as the scanner yields them; blank ones are dropped."""
+    import numpy as np
+    from PIL import Image
+
+    def text_page():
+        arr = np.full((160, 120, 3), 230, dtype=np.uint8)
+        arr[40:44, 20:100] = 20
+        return Image.fromarray(arr)
+
+    consumed = []
+
+    class Feeder:
+        def iter_pages(self):
+            for page in (text_page(), Image.new("RGB", (120, 160), (230, 230, 230)), text_page()):
+                consumed.append(page)
+                yield page
+
+    cfg = Config(output_dir=str(tmp_path), deskew=False, autocrop=False)
+    daemon._Session(cfg, FakeConn())._scan_and_deliver(Feeder())
+
+    (pdf,) = tmp_path.glob("Scan_*.pdf")
+    assert len(consumed) == 3
+    assert pdf.read_bytes().count(b"/MediaBox") == 2
+
+
+def test_scan_without_pages_delivers_nothing(tmp_path: Path):
+    class Empty:
+        def iter_pages(self):
+            return iter(())
+
+    daemon._Session(Config(output_dir=str(tmp_path)), FakeConn())._scan_and_deliver(Empty())
+    assert not list(tmp_path.glob("*.pdf"))

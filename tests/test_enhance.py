@@ -186,3 +186,21 @@ def test_enhance_disabled_is_passthrough():
     cfg = Config(enhance=False, rotate_front=0, rotate_back=0, drop_blank_pages=False, auto_color=False)
     img = Image.new("RGB", (10, 10), (200, 200, 200))
     assert process_pages([img], cfg)[0].getpixel((0, 0)) == (200, 200, 200)
+
+
+def test_median_in_strips_matches_whole_array(monkeypatch):
+    from documentscan import enhance
+
+    arr = np.random.default_rng(3).integers(0, 256, size=(103, 37), dtype=np.uint8)
+    whole = enhance._median3x3(arr)
+    for rows in (1, 2, 10, 50):
+        monkeypatch.setattr(enhance, "MEDIAN_STRIP_ROWS", rows)
+        assert np.array_equal(median3x3(arr), whole)
+
+
+def test_select_pages_works_on_encoded_pages():
+    from documentscan.enhance import select_pages
+
+    cfg = _clean_config()
+    assert select_pages([(b"a", "gray"), (b"b", "blank"), (b"c", "color")], cfg) == [b"a", b"c"]
+    assert select_pages([(b"a", "blank"), (b"b", "blank")], cfg) == [b"a", b"b"]
