@@ -91,8 +91,10 @@ class Uploader:
         if status == "SUCCESS":
             pdf.unlink()
             task_file.unlink()
-            log.info("Paperless consumed %s (document %s); removed it from the outbox",
-                     pdf.name, task.get("related_document"))
+            document = task.get("related_document")
+            log.info("Paperless consumed %s%s; removed it from the outbox",
+                     pdf.name, f" (document {document})" if document else "")
+            log.debug("Task fields: %s", sorted(task))
         elif status in ("FAILURE", "REVOKED"):
             failed = self.outbox / FAILED_SUBDIR
             failed.mkdir(exist_ok=True)
