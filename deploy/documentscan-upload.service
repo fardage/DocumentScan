@@ -1,0 +1,41 @@
+[Unit]
+Description=DocumentScan: upload scanned PDFs to paperless-ngx
+Documentation=https://github.com/fardage/DocumentScan
+Wants=network-online.target
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=documentscan
+Group=documentscan
+WorkingDirectory=/opt/documentscan
+Environment=PYTHONPATH=/opt/documentscan PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Environment=OUTPUT_DIR=/var/lib/documentscan/outbox
+# PAPERLESS_URL and PAPERLESS_TOKEN
+EnvironmentFile=/etc/documentscan.env
+ExecStart=/usr/bin/python3 -m documentscan.paperless
+Restart=always
+RestartSec=10
+StateDirectory=documentscan documentscan/outbox
+StateDirectoryMode=0750
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

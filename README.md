@@ -1,8 +1,9 @@
 # DocumentScan
 
 Press the button on a Fujitsu ScanSnap S1300 and the document is scanned in
-colour, duplex and turned into a PDF in a local outbox folder. It runs as a
-systemd service on a Raspberry Pi (a Zero 2 W is enough) next to the scanner.
+colour, duplex, turned into a PDF and uploaded to paperless-ngx, which does
+the OCR. It runs as two systemd services on a Raspberry Pi (a Zero 2 W is
+enough) next to the scanner: one drives the scanner, one uploads.
 
 ## How it works
 
@@ -25,7 +26,13 @@ systemd service on a Raspberry Pi (a Zero 2 W is enough) next to the scanner.
    the pages one at a time, so only the compressed pages are held in memory.
 5. The PDF is written to a hidden temp dir inside the outbox, fsynced and
    atomically renamed into place as `Scan_YYYY-MM-DD_HH-MM-SS.pdf`.
-6. If the scanner disappears (lid closed, unplugged, power save) the daemon
+6. The upload service posts each PDF in the outbox to paperless
+   (`/api/documents/post_document/`), keeps the returned task id next to it
+   and deletes the PDF once paperless reports the document as consumed. If
+   consumption fails (a duplicate, say) the PDF is moved to `outbox/failed/`
+   and the reason logged. While paperless is unreachable the PDFs simply wait
+   in the outbox.
+7. If the scanner disappears (lid closed, unplugged, power save) the daemon
    reconnects with backoff. Each connection attempt runs in a fresh worker
    process (libsane leaks a libusb context per init/teardown, see
    Troubleshooting); the main process never touches SANE.
@@ -39,11 +46,12 @@ process; the daemon peaks at roughly 200 MB.
 ```
 deploy/install.sh            install or update the service (run with sudo)
 deploy/documentscan.service  systemd unit (own user, hardened, memory-limited)
+deploy/documentscan-upload.service  uploader unit (same user, no USB access)
 deploy/documentscan.env      template for /etc/documentscan.env overrides
 firmware/1300_0C26.nal       proprietary S1300 firmware (see below)
 sane/dll.conf                load only the epjitsu backend
 sane/epjitsu.conf            firmware path + USB id 04c5:11ed
-documentscan/                the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon)
+documentscan/                the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon) and paperless.py, the upload service
 paperless/                   post-consume script sending a Telegram message per document
 tests/                       pytest units that need no hardware
 ```
@@ -69,9 +77,13 @@ journalctl -u documentscan -f
 ```
 
 The script installs the Debian packages (`python3-sane`, `python3-pil`,
-`python3-numpy`, `img2pdf`), creates the `documentscan` system user, copies
-the daemon, SANE config and firmware to `/opt/documentscan` and enables the
-service. Run it again after pulling changes. `/etc/documentscan.env` is only
+`python3-numpy`, `python3-requests`, `img2pdf`), creates the `documentscan`
+system user, copies the daemon, SANE config and firmware to
+`/opt/documentscan` and enables the services. The uploader is only enabled
+once `/etc/documentscan.env` has `PAPERLESS_URL` (e.g.
+`https://paperless.example:8000`) and `PAPERLESS_TOKEN` (the API token from
+your paperless profile); `journalctl -u documentscan-upload -f` shows its
+progress. Run it again after pulling changes. `/etc/documentscan.env` is only
 created once, so local overrides survive updates.
 
 The service runs as `documentscan` with no capabilities, a read-only system,
@@ -88,6 +100,9 @@ Set them in `/etc/documentscan.env` and `sudo systemctl restart documentscan`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OUTPUT_DIR` | `/var/lib/documentscan/outbox` | where finished PDFs are written |
+| `PAPERLESS_URL` | unset | paperless base URL for the upload service |
+| `PAPERLESS_TOKEN` | unset | paperless API token |
+| `UPLOAD_INTERVAL` | `10` | seconds between outbox checks |
 | `SPOOL_DIR` | `/var/lib/documentscan/spool` | raw pages of the scan in progress (about 27 MB per colour side) |
 | `SCAN_SOURCE` | `ADF Duplex` | `ADF Front`, `ADF Back` or `ADF Duplex` |
 | `SCAN_MODE` | `Color` | `Lineart`, `Gray` or `Color` |
@@ -180,3 +195,6 @@ Note: only one process can hold the scanner, so stop the daemon
 - **Service killed or Pi sluggish during big scans**: the unit caps memory at
   350 MB (`MemoryMax`). Lower `SCAN_RESOLUTION`, or free memory by booting
   without the desktop (`sudo systemctl set-default multi-user.target`).
+- **PDFs pile up in the outbox**: `journalctl -u documentscan-upload` shows
+  why (paperless unreachable, wrong token). They are uploaded once it works
+  again. PDFs paperless refused are in `outbox/failed/`.

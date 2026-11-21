@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -19,6 +19,10 @@ class Config:
     output_dir: str = "/var/lib/documentscan/outbox"
     # Raw pages of the scan in progress are kept here until processed.
     spool_dir: str = "/var/lib/documentscan/spool"
+    # Upload service: paperless base URL and API token, seconds between syncs.
+    paperless_url: str = ""
+    paperless_token: str = field(default="", repr=False)
+    upload_interval: float = 10.0
     sane_device: str | None = None
     scan_source: str = "ADF Duplex"
     scan_mode: str = "Color"
@@ -66,6 +70,9 @@ class Config:
         return cls(
             output_dir=env.get("OUTPUT_DIR", cls.output_dir),
             spool_dir=env.get("SPOOL_DIR", cls.spool_dir),
+            paperless_url=env.get("PAPERLESS_URL", cls.paperless_url),
+            paperless_token=env.get("PAPERLESS_TOKEN", ""),
+            upload_interval=float(env.get("UPLOAD_INTERVAL", cls.upload_interval)),
             sane_device=env.get("SANE_DEVICE") or None,
             scan_source=env.get("SCAN_SOURCE", cls.scan_source),
             scan_mode=env.get("SCAN_MODE", cls.scan_mode),
