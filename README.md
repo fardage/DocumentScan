@@ -52,7 +52,6 @@ firmware/1300_0C26.nal       proprietary S1300 firmware (see below)
 sane/dll.conf                load only the epjitsu backend
 sane/epjitsu.conf            firmware path + USB id 04c5:11ed
 documentscan/                the daemon (config, scanner, enhance, deskew, pdf, uploader, daemon) and paperless.py, the upload service
-paperless/                   post-consume script sending a Telegram message per document
 tests/                       pytest units that need no hardware
 ```
 
