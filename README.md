@@ -157,8 +157,8 @@ Note: only one process can hold the scanner, so stop the daemon
 - **Grey borders or a slanted page**: deskew/crop looks for the scanner
   backing around the sheet by walking inward from each image border, so it
   needs the scan window to be wider than the paper (`PAGE_WIDTH_MM` defaults
-  to 219 for that reason). A side where the sheet reaches the image border is
-  left uncropped. Set `LOG_LEVEL=DEBUG` to see which edges were found and
+  to 219 for that reason). A side where the sheet reaches the image border only
+  loses `CROP_INSET_MM`. Set `LOG_LEVEL=DEBUG` to see which edges were found and
   why others were rejected; `AUTOCROP=false` / `DESKEW=false` turn it off.
 - **Feed skew**: sheet-fed scanners let the paper turn slightly while it is
   pulled through, so the top and bottom edges rarely agree exactly; the

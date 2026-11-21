@@ -6,7 +6,7 @@ the page. Rather than classifying pixels as paper, which fails for pages with
 dark borders or coloured backgrounds, this module walks inward from each image
 border and finds, for every column (top/bottom) or row (left/right), the first
 pixel that deviates from that line's own backing level. Where the sheet reaches
-the image border no straight edge is found and that side is left uncropped.
+the image border no straight edge is found and only the inset is trimmed there.
 The four edge lines give the skew angle and, after rotation, the crop box.
 """
 
@@ -30,6 +30,10 @@ MIN_COVERAGE = 0.2        # the edge must span at least this fraction of the sid
 MIN_SPAN_INLIERS = 0.8    # and be present on this fraction of lines within its span
 INLIER_TOL = 3.0          # downsampled pixels
 INTERIOR_DEPTH = 40       # pixels (ds) inside the edge that must differ from the backing
+# ... by at least this much (median luminance). The S1300 front sensor's paper
+# can be as little as ~27 levels brighter than its backing towards the sides,
+# while the backing itself varies by only a few levels.
+INTERIOR_DEVIATION = 15
 MIN_PAGE_FRACTION = 0.25  # crop box must keep at least this much of each dimension
 
 
@@ -102,7 +106,7 @@ def find_edge(lum: np.ndarray, side: str) -> Edge | None:
     for i in np.flatnonzero(found):
         start = position[i] + 2
         stretch = profiles[i, start:min(start + INTERIOR_DEPTH, depth)]
-        if len(stretch) and abs(float(np.median(stretch)) - backing[i]) > DEVIATION:
+        if len(stretch) and abs(float(np.median(stretch)) - backing[i]) > INTERIOR_DEVIATION:
             solid[i] = True
 
     index = np.flatnonzero(solid).astype(float)
@@ -196,13 +200,16 @@ def deskew_and_crop(
         return image
 
     # After rotating about the centre, each edge is axis-aligned at the same
-    # distance from the centre it had before (cos of a small angle ~ 1).
+    # distance from the centre it had before (cos of a small angle ~ 1). A side
+    # without an edge is where the sheet runs off the scan window; the inset
+    # is trimmed there too, since such a border usually still carries a few
+    # rows of edge shadow (the S1300's leading edge on the back side does).
     nw, nh = image.size
     ncx, ncy = nw / 2, nh / 2
-    left = ncx - (cx - centre["left"]) + inset_px if "left" in centre else 0
-    right = ncx + (cx - centre["right"]) - inset_px if "right" in centre else nw
-    top = ncy - (cy - centre["top"]) + inset_px if "top" in centre else 0
-    bottom = ncy + (cy - centre["bottom"]) - inset_px if "bottom" in centre else nh
+    left = (ncx - (cx - centre["left"]) if "left" in centre else 0) + inset_px
+    right = (ncx + (cx - centre["right"]) if "right" in centre else nw) - inset_px
+    top = (ncy - (cy - centre["top"]) if "top" in centre else 0) + inset_px
+    bottom = (ncy + (cy - centre["bottom"]) if "bottom" in centre else nh) - inset_px
     box = (int(round(left)), int(round(top)), int(round(right)), int(round(bottom)))
     if box[2] - box[0] < w * MIN_PAGE_FRACTION or box[3] - box[1] < h * MIN_PAGE_FRACTION:
         log.warning("Detected page box %s implausibly small; not cropping", box)
