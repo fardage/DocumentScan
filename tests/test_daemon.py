@@ -160,30 +160,63 @@ def test_supervisor_terminates_hung_worker(monkeypatch):
     assert time.monotonic() - started < 5
 
 
-def test_scan_streams_pages_into_one_pdf(tmp_path: Path):
-    """Pages are processed one by one as the scanner yields them; blank ones are dropped."""
+def _dirs(tmp_path: Path) -> tuple[Path, Path]:
+    outbox, spool = tmp_path / "outbox", tmp_path / "spool"
+    outbox.mkdir()
+    spool.mkdir()
+    return outbox, spool
+
+
+def test_scan_feeds_whole_stack_before_processing(tmp_path: Path, monkeypatch):
+    """All sheets are scanned to the spool first, then processed; blank pages are dropped."""
     import numpy as np
     from PIL import Image
+
+    from documentscan import enhance
 
     def text_page():
         arr = np.full((160, 120, 3), 230, dtype=np.uint8)
         arr[40:44, 20:100] = 20
         return Image.fromarray(arr)
 
-    consumed = []
+    events = []
 
     class Feeder:
         def iter_pages(self):
             for page in (text_page(), Image.new("RGB", (120, 160), (230, 230, 230)), text_page()):
-                consumed.append(page)
+                events.append("scan")
                 yield page
 
-    cfg = Config(output_dir=str(tmp_path), deskew=False, autocrop=False)
+    real_process_page = enhance.process_page
+
+    def process_page(image, index, config):
+        events.append("process")
+        return real_process_page(image, index, config)
+
+    monkeypatch.setattr(enhance, "process_page", process_page)
+    outbox, spool = _dirs(tmp_path)
+    cfg = Config(output_dir=str(outbox), spool_dir=str(spool), deskew=False, autocrop=False)
     daemon._Session(cfg, FakeConn())._scan_and_deliver(Feeder())
 
-    (pdf,) = tmp_path.glob("Scan_*.pdf")
-    assert len(consumed) == 3
+    assert events == ["scan"] * 3 + ["process"] * 3
+    (pdf,) = outbox.glob("Scan_*.pdf")
     assert pdf.read_bytes().count(b"/MediaBox") == 2
+    assert not any(spool.iterdir()), "raw pages must be removed after the scan"
+
+
+def test_scan_keeps_unprocessed_page_object_valid(tmp_path: Path):
+    """With every transformation off, the page loaded from the spool is used as is."""
+    from PIL import Image
+
+    class Feeder:
+        def iter_pages(self):
+            yield Image.new("L", (40, 60), 30)
+
+    outbox, spool = _dirs(tmp_path)
+    cfg = Config(output_dir=str(outbox), spool_dir=str(spool), rotate_front=0, rotate_back=0,
+                 deskew=False, autocrop=False, enhance=False, auto_color=False)
+    daemon._Session(cfg, FakeConn())._scan_and_deliver(Feeder())
+    assert len(list(outbox.glob("Scan_*.pdf"))) == 1
 
 
 def test_scan_without_pages_delivers_nothing(tmp_path: Path):
@@ -191,5 +224,16 @@ def test_scan_without_pages_delivers_nothing(tmp_path: Path):
         def iter_pages(self):
             return iter(())
 
-    daemon._Session(Config(output_dir=str(tmp_path)), FakeConn())._scan_and_deliver(Empty())
-    assert not list(tmp_path.glob("*.pdf"))
+    outbox, spool = _dirs(tmp_path)
+    daemon._Session(Config(output_dir=str(outbox), spool_dir=str(spool)), FakeConn())._scan_and_deliver(Empty())
+    assert not list(outbox.glob("*.pdf"))
+    assert not any(spool.iterdir())
+
+
+def test_clean_spool_removes_interrupted_scans(tmp_path: Path):
+    (tmp_path / "scan-abc").mkdir()
+    (tmp_path / "scan-abc" / "page-000.ppm").write_bytes(b"P6")
+    (tmp_path / "keep.txt").write_text("x")
+    daemon.clean_spool(str(tmp_path))
+    assert [p.name for p in tmp_path.iterdir()] == ["keep.txt"]
+    daemon.clean_spool(str(tmp_path / "missing"))  # no spool dir yet: nothing to do

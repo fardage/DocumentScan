@@ -17,6 +17,8 @@ def _env_bool(name: str, default: bool) -> bool:
 class Config:
     # Finished PDFs are written here.
     output_dir: str = "/var/lib/documentscan/outbox"
+    # Raw pages of the scan in progress are kept here until processed.
+    spool_dir: str = "/var/lib/documentscan/spool"
     sane_device: str | None = None
     scan_source: str = "ADF Duplex"
     scan_mode: str = "Color"
@@ -63,6 +65,7 @@ class Config:
         env = os.environ
         return cls(
             output_dir=env.get("OUTPUT_DIR", cls.output_dir),
+            spool_dir=env.get("SPOOL_DIR", cls.spool_dir),
             sane_device=env.get("SANE_DEVICE") or None,
             scan_source=env.get("SCAN_SOURCE", cls.scan_source),
             scan_mode=env.get("SCAN_MODE", cls.scan_mode),

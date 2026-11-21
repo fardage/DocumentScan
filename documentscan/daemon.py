@@ -2,7 +2,7 @@
 
 The process is split in two:
 
-* a supervisor (the container's main process) that never touches SANE, and
+* a supervisor (the service's main process) that never touches SANE, and
 * a worker process per scanner session that initialises SANE, waits for the
   button and scans.
 
@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import shutil
 import signal
 import sys
+import tempfile
 import time
 from multiprocessing.connection import Connection
+from pathlib import Path
 
 from .config import Config
 
@@ -31,6 +34,7 @@ log = logging.getLogger("documentscan")
 BACKOFF_MIN = 2.0
 BACKOFF_MAX = 30.0
 WORKER_STOP_TIMEOUT = 15.0
+SPOOL_PREFIX = "scan-"
 
 # Worker exit codes.
 EXIT_STOPPED = 0
@@ -68,6 +72,7 @@ class Daemon:
             self.config.enhance,
             self.config.output_dir,
         )
+        clean_spool(self.config.spool_dir)
 
         backoff = BACKOFF_MIN
         while self.running:
@@ -138,6 +143,13 @@ class Daemon:
         deadline = time.monotonic() + seconds
         while self.running and time.monotonic() < deadline:
             time.sleep(min(0.25, deadline - time.monotonic()))
+
+
+def clean_spool(spool_dir: str) -> None:
+    """Remove raw pages left behind by a scan that was killed midway."""
+    for leftover in Path(spool_dir).glob(SPOOL_PREFIX + "*"):
+        log.warning("Removing raw pages of an interrupted scan: %s", leftover)
+        shutil.rmtree(leftover, ignore_errors=True)
 
 
 # ----------------------------------------------------------------------
@@ -214,24 +226,39 @@ class _Session:
             paper_was_loaded = scanner.page_loaded()
 
     def _scan_and_deliver(self, scanner) -> None:
+        from PIL import Image  # noqa: PLC0415
+
         from .enhance import process_page, select_pages  # noqa: PLC0415
         from .pdf import encode_page, jpegs_to_pdf  # noqa: PLC0415
         from .uploader import deliver  # noqa: PLC0415
 
         cfg = self.config
         started = time.monotonic()
-        # Each page is processed and JPEG-encoded as soon as it is scanned, so
-        # only compressed pages pile up: a raw 300 dpi colour side is about
-        # 27 MB, and a Pi Zero cannot hold a whole batch of those.
-        processed = []
-        for index, image in enumerate(scanner.iter_pages()):
-            page, kind = process_page(image, index, cfg)
-            del image
-            processed.append((encode_page(page, cfg.scan_resolution, cfg.jpeg_quality), kind))
-            del page
-        if not processed:
-            log.warning("Scan finished with no pages; nothing to deliver")
-            return
+        # A raw 300 dpi colour side is about 27 MB, more than a Pi Zero can
+        # hold for a whole batch, and processing one takes longer than
+        # scanning it. Raw pages therefore go to disk as they come off the
+        # scanner, so the feeder runs through the stack without pausing, and
+        # are processed one by one afterwards; only JPEGs stay in memory.
+        with tempfile.TemporaryDirectory(prefix=SPOOL_PREFIX, dir=cfg.spool_dir) as spool:
+            raw = []
+            for index, image in enumerate(scanner.iter_pages()):
+                path = Path(spool) / f"page-{index:03d}.ppm"
+                image.save(path)
+                del image
+                raw.append(path)
+            if not raw:
+                log.warning("Scan finished with no pages; nothing to deliver")
+                return
+            log.info("Scanned %d page(s) in %.1fs; processing", len(raw), time.monotonic() - started)
+            processed = []
+            for index, path in enumerate(raw):
+                image = Image.open(path)
+                image.load()  # reads the pixels and closes the file
+                path.unlink()
+                page, kind = process_page(image, index, cfg)
+                del image
+                processed.append((encode_page(page, cfg.scan_resolution, cfg.jpeg_quality), kind))
+                del page
         pages = select_pages(processed, cfg)
         pdf = jpegs_to_pdf(pages)
         path = deliver(pdf, cfg.output_dir, cfg.filename_prefix)

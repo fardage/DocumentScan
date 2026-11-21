@@ -20,8 +20,9 @@ systemd service on a Raspberry Pi (a Zero 2 W is enough) next to the scanner.
    levelled so the paper is pure white and the ink black, and sharpened last.
    Pages without coloured content are stored as greyscale, blank pages are
    dropped. Then the pages are encoded as JPEG and wrapped into a PDF with
-   `img2pdf`. Pages are processed one at a time while the next sheet waits in
-   the feeder, so only the compressed pages of a batch are held in memory.
+   `img2pdf`. While the stack runs through, every raw page goes straight to a
+   spool directory on disk; processing starts after the last sheet and takes
+   the pages one at a time, so only the compressed pages are held in memory.
 5. The PDF is written to a hidden temp dir inside the outbox, fsynced and
    atomically renamed into place as `Scan_YYYY-MM-DD_HH-MM-SS.pdf`.
 6. If the scanner disappears (lid closed, unplugged, power save) the daemon
@@ -29,8 +30,9 @@ systemd service on a Raspberry Pi (a Zero 2 W is enough) next to the scanner.
    process (libsane leaks a libusb context per init/teardown, see
    Troubleshooting); the main process never touches SANE.
 
-On a Pi Zero 2 W a 300 dpi colour page takes about 12 seconds to process and
-the daemon peaks at roughly 200 MB.
+On a Pi Zero 2 W the feeder needs a few seconds per side (writing the raw
+page to the SD card), then each 300 dpi colour page takes about 15 seconds to
+process; the daemon peaks at roughly 200 MB.
 
 ## Layout
 
@@ -86,6 +88,7 @@ Set them in `/etc/documentscan.env` and `sudo systemctl restart documentscan`.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OUTPUT_DIR` | `/var/lib/documentscan/outbox` | where finished PDFs are written |
+| `SPOOL_DIR` | `/var/lib/documentscan/spool` | raw pages of the scan in progress (about 27 MB per colour side) |
 | `SCAN_SOURCE` | `ADF Duplex` | `ADF Front`, `ADF Back` or `ADF Duplex` |
 | `SCAN_MODE` | `Color` | `Lineart`, `Gray` or `Color` |
 | `SCAN_RESOLUTION` | `300` | dpi, 50 to 600 |

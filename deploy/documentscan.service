@@ -12,12 +12,12 @@ WorkingDirectory=/opt/documentscan
 Environment=PYTHONPATH=/opt/documentscan PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 # Our own dll.conf/epjitsu.conf (epjitsu only, firmware under /opt/documentscan).
 Environment=SANE_CONFIG_DIR=/opt/documentscan/sane
-Environment=OUTPUT_DIR=/var/lib/documentscan/outbox
+Environment=OUTPUT_DIR=/var/lib/documentscan/outbox SPOOL_DIR=/var/lib/documentscan/spool
 EnvironmentFile=-/etc/documentscan.env
 ExecStart=/usr/bin/python3 -m documentscan.daemon
 Restart=always
 RestartSec=5
-StateDirectory=documentscan documentscan/outbox
+StateDirectory=documentscan documentscan/outbox documentscan/spool
 StateDirectoryMode=0750
 
 # One page in flight needs roughly 200 MB at 300 dpi colour; above that the
